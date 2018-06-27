@@ -330,6 +330,13 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		}
 		return false;
 	}
+	function checkGuild() {
+		if (!guild) {
+			channel.sendMessage(':warning: You cannot use that command in DMs.');
+			return true;
+		}
+		return false;
+	}
 	function error(e) {
 		console.error(e);
 		channel.sendMessage('Oopsie woopsie! UwU we made a fucky wucky! A wittle fucko boingo!\n```\n' + e + '\n```');
@@ -375,6 +382,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'ilove':
 		case 'addme':
 		case 'roleme':
+			if (checkGuild()) break;
 			var roles = parseCSV(args.slice(1)).map(id => {
 				var role = parseRole(id);
 				if (Number(role)) return role;
@@ -390,6 +398,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'ihate':
 		case 'removeme':
 		case 'unroleme':
+			if (checkGuild()) break;
 			var roles = parseCSV(args.slice(1)).map(id => {
 				var role = parseRole(id);
 				if (Number(role)) return role;
@@ -441,6 +450,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			
 		case 'alias':
 			if (checkAuth()) break;
+			if (checkGuild()) break;
 			var [role, ...aliases] = args.slice(2);
 			role = parseRole(role);
 			aliases = parseCSV(aliases);
@@ -514,6 +524,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'link':
 		case 'map':
 			if (checkAuth()) break;
+			if (checkGuild()) break;
 			var [role, ...kinks] = args.slice(1);
 			role  = parseRole(role);
 			kinks = parseCSV(kinks);
@@ -544,6 +555,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'unlink':
 		case 'unmap':
 			if (checkAuth()) break;
+			if (checkGuild()) break;
 			var [role, ...kinks] = args.slice(1);
 			role  = parseRole(role);
 			kinks = parseCSV(kinks);
@@ -574,6 +586,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'linked':
 		case 'mapped':
 			if (checkAuth()) break;
+			if (checkGuild()) break;
 			var role = parseRole(args.slice(1).join(' '));
 			var name = getRoleName(role);
 			if (role || name) {
@@ -615,6 +628,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			
 		case 'default':
 			if (checkAuth()) return;
+			if (checkGuild()) break;
 			var role = parseRole(args.slice(1).join(' '));
 			var name = getRoleName(role);
 			if (role || name) {
@@ -652,6 +666,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 		case 'assign':
 		case 'diagnose':
 		default:
+			if (checkGuild()) break;
 			var targetMember = member;
 			var assign = args[0] === 'assign';
 			if (assign) {
