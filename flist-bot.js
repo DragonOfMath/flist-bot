@@ -35,11 +35,11 @@ const HELP = `FListBot can retrieve your F-List page and assign you roles based 
 
 **__Usage__**:
 
-\`${PREFIX} [diagnose] [f-list url | character name], [choice]\` - lookup your character's kinks and get roles relevant to them.
-	Omit \`diagnose\` to assign roles.
-	Include \`diagnose\` (in verbatim) to be DM'ed a list of applicable roles.
-	Additionally, \`choice\` sets the kink choice tier: **fave**, **yes**, **maybe**, and **no**. Picking a tier includes all tiers before it.
-	If none of the kinks match, you're given the default role if possible.
+\`${PREFIX} [diagnose] [f-list url | character name] [choice]\` - lookup your character's kinks and get roles relevant to them.
+	▪ Omit \`diagnose\` to assign roles.
+	▪ Include \`diagnose\` (in verbatim) to be DM'ed a list of applicable roles.
+	▪ Additionally, \`choice\` sets the kink choice tier: **fave**, **yes**, **maybe**, and **no**. Picking a tier includes all tiers before it.
+	▪ If none of the kinks match, you're given the default role if possible.
 
 \`${PREFIX} ilike/ilove/addme/roleme [roles | kinks]\` - assigns you the roles that are linked to the following kinks/aliases.
 
@@ -630,6 +630,16 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			}
 			channel.sendMessage('Default role: **' + (name || '(Not set)') + '**');
 			break;
+		
+		case 'cleanup':
+		case 'prune':
+		case 'tidy':
+			if (checkAuth()) return;
+			var count = args[1] || 50;
+			console.log('Deleting',count,'messages in',channel.id);
+			channel.fetchMessages(Number(count))
+			.then(response => client.Messages.deleteMessages(response.messages));
+			break;
 			
 		case 'quit':
 		case 'exit':
@@ -638,6 +648,7 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			client.disconnect();
 			process.exit(0);
 			break;
+			
 		case 'assign':
 		case 'diagnose':
 		default:
