@@ -35,9 +35,12 @@ const HELP = `FListBot can retrieve your F-List page and assign you roles based 
 
 **__Usage__**:
 
-\`${PREFIX} [f-list url | character name], [choices]\` - lookup your character's kinks and get roles relevant to them.
-	Additionally, choices let you decide which kinks are relevant: **fave**, **yes**, **maybe**, and **no**.
-	
+\`${PREFIX} [diagnose] [f-list url | character name], [choice]\` - lookup your character's kinks and get roles relevant to them.
+	Omit \`diagnose\` to assign roles.
+	Include \`diagnose\` (in verbatim) to be DM'ed a list of applicable roles.
+	Additionally, \`choice\` sets the kink choice tier: **fave**, **yes**, **maybe**, and **no**. Picking a tier includes all tiers before it.
+	If none of the kinks match, you're given the default role if possible.
+
 \`${PREFIX} ilike/ilove/addme/roleme [roles | kinks]\` - assigns you the roles that are linked to the following kinks/aliases.
 
 \`${PREFIX} idislike/ihate/removeme/unroleme [roles | kinks]\` - removes you from the roles that are linked to the following kinks/aliases.
@@ -50,19 +53,27 @@ const HELP = `FListBot can retrieve your F-List page and assign you roles based 
 
 **__Admin-Only__**:
 
+\`${PREFIX} assign [@user] [diagnose] [f-list url | character name] [choice]\` - Same as the main command, except an admin may use this for any user.
+
+\`${PREFIX} default [role]\` - gets or sets the default role.
+
 \`${PREFIX} alias add/set [role] [alias1, alias2, ...]\` - adds aliases to a role.
 
 \`${PREFIX} alias remove/clear [role] [alias1, alias2, ...]\` - removes aliases from a role.
 
 \`${PREFIX} alias view/list [role]\` - view aliases for the given role, or all applicable roles if one isn't specified.
 
-\`${PREFIX} assign/add/link/map [role] [kink1, kink2, ...]\` - map the following kink names, delimited by commas, to the role.
+\`${PREFIX} link/map [role] [kink1, kink2, ...]\` - map the following kink names, delimited by commas, to the role.
 
-\`${PREFIX} unassign/remove/unlink/unmap [role] [kink1, kink2, ...]\` - delete the following kink names, delimited by commas, from the role.
+\`${PREFIX} unlink/unmap [role] [kink1, kink2, ...]\` - delete the following kink names, delimited by commas, from the role.
 
-\`${PREFIX} assigned/mapped/linked [role]\` - view kinks assigned to a role, or all applicable roles if one isn't specified.
+\`${PREFIX} linked/mapped [role]\` - view kinks mapped to a role, or all applicable roles if one isn't specified.
 
 \`${PREFIX} quit/exit/stop\` - stop running the bot.
+
+**__Misc__**:
+
+\`${PREFIX} test\` - basic testing command
 `;
 
 
@@ -77,9 +88,10 @@ function fetch(url, options = {}) {
 			} else if (response.statusCode !== 200) {
 				reject('Status Code: '+response.statusCode);
 			} else try {
+				if (body && body.error) throw body.error;
 				resolve(body);
 			} catch (e) {
-				reject(e.message);
+				reject(e);
 			}
 		});
 	});
@@ -213,7 +225,7 @@ class FList {
 	getCharacter(character) {
 		var form = {
 			account: this.account,
-			ticket: this.ticket
+			ticket:  this.ticket
 		};
 		if (typeof character === 'string') {
 			form.name = character;
@@ -223,6 +235,7 @@ class FList {
 			throw 'Invalid character name or ID: ' + character;
 		}
 		return fetch('https://www.f-list.net/json/api/character-data.php', {
+			method: 'POST',
 			json: true,
 			form: form
 		});
@@ -341,7 +354,16 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 	
 	console.log('Command:',message);
 	var args = message.substring(PREFIX.length+1).split(' ');
+	try {
 	switch (args[0]) {
+		case '':
+		case undefined:
+			break;
+			
+		case 'test':
+			channel.sendMessage('hi');
+			break;
+			
 		case 'help':
 		case 'halp':
 		case 'ayuda':
@@ -419,7 +441,6 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			
 		case 'alias':
 			if (checkAuth()) break;
-		
 			var [role, ...aliases] = args.slice(2);
 			role = parseRole(role);
 			aliases = parseCSV(aliases);
@@ -592,6 +613,24 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			}
 			break;
 			
+		case 'default':
+			if (checkAuth()) return;
+			var role = parseRole(args.slice(1).join(' '));
+			var name = getRoleName(role);
+			if (role || name) {
+				if (name) {
+					auth['default'] = role;
+					save('auth', auth);
+				} else {
+					throw 'Invalid role name or ID: ' + role;
+				}
+			} else {
+				role = auth['default'];
+				name = role && getRoleName(role);
+			}
+			channel.sendMessage('Default role: **' + (name || '(Not set)') + '**');
+			break;
+			
 		case 'quit':
 		case 'exit':
 		case 'stop':
@@ -599,35 +638,75 @@ client.Dispatcher.on('MESSAGE_CREATE', (response) => {
 			client.disconnect();
 			process.exit(0);
 			break;
-			
+		case 'assign':
+		case 'diagnose':
 		default:
-			var [name, ...choices] = args.slice(1);
+			var targetMember = member;
+			var assign = args[0] === 'assign';
+			if (assign) {
+				if (checkAuth()) return;
+				var id = args[1].match(/\d+/);
+				targetMember = guild.members.find(m => m.id == id);
+				if (!targetMember) {
+					throw 'Invalid user: ' + args[1];
+				}
+				args.splice(0,2);
+			}
+			var diagnose = args[0] === 'diagnose';
+			if (diagnose) {
+				args.splice(0,1);
+			}
+			var [name, choice] = args;
 			if (FLIST_ACCT.test(name)) name = name.match(FLIST_ACCT)[1];
-			if (choices.length == 0) choices = ['fave','yes'];
-			
+			if (choice) choice = choice.toLowerCase();
+			choice = FLIST_CHOICES.indexOf(choice);
+			if (choice < 0) choice = 1;
 			flist.getCharacter(name)
-			.then(characterData => {
-				if (!characterData) throw 'Character data not found.';
-				
-				var characterKinks = characterData.kinks;
-				//var mappedKinks = flist.mapKinks(characterKinks);
-				var recognizedKinks = [];
+			.then(charData => {
+				if (!charData) throw 'Character data not found.';
+				var charKinks = charData.kinks;
+				if (!charKinks) throw 'Character kinks not found?';
+				var kinkMap = {};
 				for (var roleID in kinkRoleMap) {
-					if (kinkRoleMap[roleID].some(kinkName => {
-						var kink = flist.getKink(kinkName);
-						return (kink && (kink.id in characterKinks) && (choices.includes(characterKinks[kink.id])));
+					var kinks = kinkRoleMap[roleID];
+					var kinksMatched = [];
+					if (kinks.some(kinkID => {
+						return (kinkID in charKinks)
+						&& (FLIST_CHOICES.indexOf(charKinks[kinkID]) <= choice)
+						&& (kinksMatched.push(kinkID));
 					})) {
-						recognizedKinks.push(roleID);
-						member.assignRole(roleID);
+						kinkMap[roleID] = kinksMatched;
 					}
 				}
-				if (recognizedKinks.length) {
+				var recognizedKinks = Object.keys(kinkMap);
+				if (diagnose) {
+					var embed = {
+						title: 'F-List Diagnosis: Applicable Roles',
+						description: ''
+					};
+					for (var roleID in kinkMap) {
+						embed.description += '**__' + getRoleName(roleID) + '__** \n';
+						embed.description += kinkMap[roleID].map(k => flist.getKink(k).toString()).join('\n') + '\n';
+					}
+					user.openDM().then(DM => DM.sendMessage('', false, embed));
+					channel.sendMessage('I sent you a diagnosis of that F-List.');
+				} else if (recognizedKinks.length) {
+					recognizedKinks.forEach(roleID => targetMember.assignRole(roleID));
 					channel.sendMessage('I assigned you some roles based on your F-List likes.');
 				} else {
-					channel.sendMessage('Hmm, I don\'t recognize any kinks you have.');
+					roleID = auth['default'];
+					if (roleID) {
+						targetMember.assignRole(roleID);
+						channel.sendMessage('I assigned you the default role.');
+					} else {
+						channel.sendMessage('Hmm, I don\'t recognize any kinks you have.');
+					}
 				}
 			})
 			.catch(error);
+	}
+	} catch (e) {
+		error(e);
 	}
 });
 
