@@ -30,52 +30,7 @@ const FLIST_ACCT  = /^https:\/\/www.f-list.net\/c\/(.+)/;
 const FLIST_COLOR = 0x1b446f;
 const FLIST_CHOICES = ['fave','yes','maybe','no'];
 
-const PREFIX      = '.flist';
-const HELP = `FListBot can retrieve your F-List page and assign you roles based on the things you like.
-
-**__Usage__**:
-
-\`${PREFIX} [diagnose] [f-list url | character name] [choice]\` - lookup your character's kinks and get roles relevant to them.
-	▪ Omit \`diagnose\` to assign roles.
-	▪ Include \`diagnose\` (in verbatim) to be DM'ed a list of applicable roles.
-	▪ Additionally, \`choice\` sets the kink choice tier: **fave**, **yes**, **maybe**, and **no**. Picking a tier includes all tiers before it.
-	▪ If none of the kinks match, you're given the default role if possible.
-
-\`${PREFIX} ilike/ilove/addme/roleme [roles | kinks]\` - assigns you the roles that are linked to the following kinks/aliases.
-
-\`${PREFIX} idislike/ihate/removeme/unroleme [roles | kinks]\` - removes you from the roles that are linked to the following kinks/aliases.
-
-\`${PREFIX} kinks\` - get a list of kink groups.
-
-\`${PREFIX} kinks [kinkGroupName]\` - get a list of kinks that are in a group.
-
-\`${PREFIX} kink [kinkName]\` - get the description of the kink, if it exists.
-
-**__Admin-Only__**:
-
-\`${PREFIX} assign [@user] [diagnose] [f-list url | character name] [choice]\` - Same as the main command, except an admin may use this for any user.
-
-\`${PREFIX} default [role]\` - gets or sets the default role.
-
-\`${PREFIX} alias add/set [role] [alias1, alias2, ...]\` - adds aliases to a role.
-
-\`${PREFIX} alias remove/clear [role] [alias1, alias2, ...]\` - removes aliases from a role.
-
-\`${PREFIX} alias view/list [role]\` - view aliases for the given role, or all applicable roles if one isn't specified.
-
-\`${PREFIX} link/map [role] [kink1, kink2, ...]\` - map the following kink names, delimited by commas, to the role.
-
-\`${PREFIX} unlink/unmap [role] [kink1, kink2, ...]\` - delete the following kink names, delimited by commas, from the role.
-
-\`${PREFIX} linked/mapped [role]\` - view kinks mapped to a role, or all applicable roles if one isn't specified.
-
-\`${PREFIX} quit/exit/stop\` - stop running the bot.
-
-**__Misc__**:
-
-\`${PREFIX} test\` - basic testing command
-`;
-
+const PREFIX = 'flist.';
 
 function fetch(url, options = {}) {
 	options.url     = 'url'  in options ? options.url  : url;
@@ -139,7 +94,7 @@ class Kink {
 	}
 	embed() {
 		return {
-			title: 'F-List - Kink: ' + this.name,
+			title: this.name,
 			description: this.description,
 			color: FLIST_COLOR
 		};
@@ -157,7 +112,7 @@ class KinkGroup {
 	}
 	embed() {
 		var e = {
-			title: 'F-List - Kink Group: ' + this.name,
+			title: 'Group: ' + this.name,
 			description: '',
 			color: FLIST_COLOR
 		};
@@ -223,6 +178,10 @@ class FList {
 		});
 	}
 	getCharacter(character) {
+		if (FLIST_ACCT.test(character)) {
+			character = character.match(FLIST_ACCT)[1];
+		}
+		
 		var form = {
 			account: this.account,
 			ticket:  this.ticket
@@ -239,6 +198,24 @@ class FList {
 			json: true,
 			form: form
 		});
+	}
+	getAssignableRoles(charData, choice = 1) {
+		if (!charData) throw 'Character not found.';
+		var charKinks = charData.kinks;
+		if (!charKinks) throw 'Character kinks missing.';
+		var kinkMap = {};
+		for (var roleID in kinkRoleMap) {
+			var kinks = kinkRoleMap[roleID];
+			var kinksMatched = [];
+			if (kinks.some(kinkID => {
+				return (kinkID in charKinks)
+				&& (FLIST_CHOICES.indexOf(charKinks[kinkID]) <= choice)
+				&& (kinksMatched.push(kinkID));
+			})) {
+				kinkMap[roleID] = kinksMatched;
+			}
+		}
+		return kinkMap;
 	}
 	mapKinks(kinks) {
 		var mappedKinks = {};
@@ -273,6 +250,15 @@ class FList {
 		}
 		return null;
 	}
+	getKinkRole(kink) {
+		kink = this.getKink(kink);
+		if (kink) for (var roleID in kinkRoleMap) {
+			if (kinkRoleMap[roleID].find(k => k == kink.id)) {
+				return roleID;
+			}
+		}
+		return 0;
+	}
 	search(query) {
 		var matchedKinks = [];
 		for (var k in this.globalKinks) {
@@ -286,9 +272,8 @@ class FList {
 	}
 	embed() {
 		var e = {
-			title: 'F-List - Kink Groups',
-			description: '',
-			color: FLIST_COLOR
+			title: 'Kink Groups',
+			description: ''
 		};
 		for (var kg in this.kinkGroups) {
 			var group = this.kinkGroups[kg];
@@ -299,6 +284,557 @@ class FList {
 }
 
 const flist = new FList(auth.account, auth.password);
+
+class Context {
+	constructor(response, client) {
+		this.context = this;
+		this.client  = client;
+		this.message = response.message;
+		this.content = this.message.content;
+		this.channel = this.message.channel;
+		this.guild   = this.channel.guild;
+		this.user    = this.message.author;
+		this.member  = this.guild ? this.user.memberOf(this.guild) : null;
+		
+		this.command = this.content.startsWith(PREFIX) ? this.content.substring(PREFIX.length+0) : '';
+		if (this.command) {
+			var [cmd, ...args] = this.command.split(' ');
+			this.cmd  = cmd;
+			this.args = args;
+		}
+	}
+	handleError(err) {
+		if (err) {
+			console.error(err);
+			return this.channel.sendMessage(':warning: ' + err);
+		}
+	}
+	softError(err) {
+		if (err) {
+			console.error(err);
+			return this.channel.sendMessage('Oops! Something went wrong...');
+		}
+	}
+	getRoleName(role) {
+		role = this.guild.roles.find(r => r.id == role);
+		return role ? role.name : '';
+	}
+}
+
+class Command {
+	constructor(id, descriptor = {}) {
+		if (!id) throw 'Command requires ID.';
+		this.id = id;
+		Object.assign(this, this.constructor.TEMPLATE, descriptor);
+	}
+	check(context) {
+		if (this.private && !auth.admins.includes(context.user.id)) {
+			return 'You are not authorized to use this command.';
+		}
+		if (this.guild && !context.guild) {
+			return 'You must be in a guild to use this command.';
+		}
+		return;
+	}
+	resolve(context) {
+		var err = this.check(context);
+		if (err) {
+			return Promise.reject(err);
+		} else try {
+			return Promise.resolve(this.run.call(this, context))
+			.then(response => {
+				if (this.title && response) {
+					if (typeof response === 'object') {
+						response.title = this.title + (response.title ? ' | ' + response.title : '');
+					} else {
+						response = '**' + this.title + '**\n' + response;
+					}
+				}
+				return response;
+			});
+		} catch (e) {
+			return Promise.reject(e);
+		}
+	}
+	toString() {
+		return PREFIX + this.id +
+		(this.aliases.length ? '/' + this.aliases.join('/') : '') +
+		(this.parameters.length ? ' ' + this.parameters.join(' ') : '');
+	}
+	get usage() {
+		return `\`${this.toString()}\`: ${this.info}`;
+	}
+	embed() {
+		return {
+			title: 'Usage for ' + quote(this.id),
+			description: this.info || 'No information about this command.',
+			fields: [
+				{
+					name: 'Usage',
+					value: '`' + this.toString() + '`'
+				},
+				{
+					name: 'Admin Only',
+					value: this.private ? 'Yes' : 'No',
+					inline: true
+				},
+				{
+					name: 'Guild Only',
+					value: this.guild ? 'Yes' : 'No',
+					inlue: true
+				}
+			]
+		};
+	}
+	
+}
+
+Command.TEMPLATE = {
+	title: '',
+	info: '',
+	aliases: [],
+	parameters: [],
+	private: false,
+	guild: false,
+	run: function () {}
+};
+
+class Commands {
+	static create(id, descriptor) {
+		this._[id.toLowerCase()] = new Command(id, descriptor);
+	}
+	static get(id) {
+		id = id.toLowerCase();
+		for (var cmd in this._) {
+			if (cmd == id || this._[cmd].aliases.includes(id)) {
+				return this._[cmd];
+			}
+		}
+	}
+	static list() {
+		return Object.keys(this._).map(cmd => this._[cmd].usage).join('\n\n');
+	}
+}
+Commands._ = {};
+
+Commands.create('help', {
+	title: 'Usage',
+	info: 'Provides a list of commands and help with command usage.',
+	aliases: ['halp','ayuda','?'],
+	parameters: ['[command]'],
+	run: function ({args}) {
+		var cmd = args[0];
+		if (cmd) {
+			var command = Commands.get(cmd);
+			if (!command) {
+				throw 'Invalid command: ' + cmd;
+			}
+			return command.embed();
+		} else {
+			return Commands.list();
+		}
+	}
+});
+Commands.create('get', {
+	title: 'F-List - Get F-List Character',
+	info: `Retrieve the F-List page for a character's kinks in order to assign the associated roles.
+	▪ \`choice\` sets the kink choice tier: **fave**, **yes**, **maybe**, and **no**. Picking a tier includes all tiers before it.
+	▪ If none of the kinks match, the default role is used.
+	▪ For admins, include \`for @user\` at the end if you wish to assign the roles to another user.`,
+	guild: true,
+	aliases: ['do'],
+	parameters: ['[character | url]', '[choice]', '[for @user]'],
+	run: function ({context,client,args,guild,member}) {
+		var targetMember = member;
+		if (args[args.length-2] == 'for') {
+			if (!auth.admins.includes(member.id)) {
+				throw 'You are not authorized to use this for other users.';
+			}
+			var id = args.pop().match(/\d+/);
+			targetMember = guild.members.find(m => m.id == id);
+			args.pop();
+		}
+		var choice = args.pop();
+		if (choice && FLIST_CHOICES.includes(choice)) {
+			choice = FLIST_CHOICES.indexOf(choice);
+		} else {
+			args.push(choice);
+			choice = 1;
+		}
+		var name = args.join(' ');
+		
+		return flist.getCharacter(name)
+		.then(charData => flist.getAssignableRoles(charData, choice))
+		.then(kinkMap => {
+			var recognizedKinks = Object.keys(kinkMap);
+			
+			if (recognizedKinks.length) {
+				recognizedKinks.forEach(roleID => targetMember.assignRole(roleID));
+				return 'I assigned you some roles based on your F-List likes.';
+			} else {
+				roleID = auth['default'];
+				if (roleID) {
+					targetMember.assignRole(roleID);
+					return 'I assigned you the default role.';
+				} else {
+					return 'Hmm, I don\'t recognize any kinks you have.';
+				}
+			}
+		});
+	}
+});
+Commands.create('test', {
+	title: 'F-List - Applicable Roles',
+	info: 'Retrieve the F-List page for a character\'s kinks, then list the applicable roles without assigning them.',
+	guild: true,
+	aliases: ['try','diagnose'],
+	parameters: ['[character | url]', '[choice]'],
+	run: function ({context,client,args,user}) {
+		var choice = args.pop();
+		if (choice && FLIST_CHOICES.includes(choice)) {
+			choice = FLIST_CHOICES.indexOf(choice);
+		} else {
+			args.push(choice);
+			choice = 1;
+		}
+		var name = args.join(' ');
+		
+		return flist.getCharacter(name)
+		.then(charData => flist.getAssignableRoles(charData, choice))
+		.then(kinkMap => {
+			var e = {
+				title: this.title + ' for ' + quote(name),
+				description: '',
+				color: FLIST_COLOR
+			};
+			for (var roleID in kinkMap) {
+				e.description += '**__' + context.getRoleName(roleID) + '__** \n';
+				e.description += kinkMap[roleID].map(k => flist.getKink(k).toString()).join('\n') + '\n';
+			}
+			if (!e.description) {
+				e.description = 'No applicable roles.';
+			}
+			user.openDM().then(DM => DM.sendMessage('', false, e));
+			return 'I sent you a list of roles applicable to the kinks found on that F-List.';
+		});
+	}
+});
+
+Commands.create('ilike', {
+	title: 'I Like...',
+	info: 'Assigns you the roles that are linked to the specified kinks/aliases.',
+	aliases: ['ilove','addme','roleme'],
+	parameters: ['[roles | kinks...]'],
+	guild: true,
+	run: function ({args,member}) {
+		var roles = parseCSV(args).map(id => {
+			var role = parseRole(id);
+			if (Number(role)) return role;
+			else return flist.getKinkRole(id);
+		});
+		roles.filter(Boolean).forEach(role => member.assignRole(role));
+		return 'I have assigned you some roles based on your interests.';
+	}
+});
+Commands.create('idislike', {
+	title: 'I Dislike...',
+	info: 'Removes you from the roles that are linked to the specified kinks/aliases.',
+	aliases: ['ihate','removeme','unroleme'],
+	parameters: ['[roles | kinks...]'],
+	guild: true,
+	run: function ({args,member}) {
+		var roles = parseCSV(args).map(id => {
+			var role = parseRole(id);
+			if (Number(role)) return role;
+			else return flist.getKinkRole(id);
+		});
+		roles.filter(Boolean).forEach(role => member.unassignRole(role));
+		return 'I have removed some of your roles that you didn\'t like.';
+	}
+});
+Commands.create('kinks', {
+	title: 'F-List Kinks',
+	info: 'Display a list of kink groups, or kinks in a specified group.',
+	parameters: ['[group]'],
+	run: function ({args}) {
+		var specificKinkGroup = args.join(' ');
+		if (specificKinkGroup) {
+			var group = flist.getKinkGroup(specificKinkGroup);
+			if (!group) {
+				throw 'Unknown kink group: ' + quote(specificKinkGroup);
+			}
+			return group.embed();
+		} else {
+			return flist.embed();
+		}
+	}
+});
+Commands.create('kink', {
+	title: 'F-List Kink',
+	info: 'Retrieve a description of the specified kink, by name or ID.',
+	parameters: ['[kink]'],
+	run: function ({args}) {
+		var kinkName = args.join(' ');
+		var kink = flist.getKink(kinkName);
+		if (!kink) {
+			throw 'Unknown kink: ' + quote(kinkName);
+		}
+		return kink.embed();
+	}
+});
+Commands.create('search', {
+	title: 'F-List - Search',
+	info: 'Search for kinks matching the given keywords.',
+	aliases: ['find', 'lookup', 'query'],
+	parameters: ['[kink(s)]'],
+	run: function ({args}) {
+		var kinkQuery = parseCSV(args);
+		var results = flist.search(kinkQuery);
+		if (results.length) {
+			return {
+				title: 'F-List - Matches for ' + kinkQuery.map(quote).join(', '),
+				description: results.map(kink => kink.toString()).join('\n')
+			};
+		} else {
+			throw 'No kinks matched your query.';
+		}
+	}
+});
+
+Commands.create('alias', {
+	title: 'Role Alias',
+	info: 'Add, remove, and view aliases for roles.',
+	private: true,
+	guild: true,
+	parameters: ['<add/set|remove/clear|view/list>','[role]','[aliases...]'],
+	run: function ({context,args}) {
+		var [method, role, ...aliases] = args;
+		role = parseRole(role);
+		aliases = parseCSV(aliases);
+		switch (method) {
+			case 'add':
+			case 'set':
+				if (!role) {
+					throw 'Invalid role ID: ' + quote(role);
+				}
+				roleAliases[role] = roleAliases[role] || [];
+				for (var a of aliases) {
+					if (!roleAliases[role].find(ra => strcmp(ra,a))) {
+						roleAliases[role].push(a);
+					}
+				}
+				try {
+					save('aliases', roleAliases);
+					return 'Aliases updated for role ' + quote(context.getRoleName(role));
+				} catch (e) {
+					context.softError(e);
+				}
+				break;
+			case 'remove':
+			case 'clear':
+				if (!role) {
+					throw 'Invalid role ID: ' + quote(role);
+				}
+				roleAliases[role] = roleAliases[role] || [];
+				for (var a of aliases) {
+					var idx = roleAliases[role].findIndex(ra => strcmp(ra,a));
+					if (idx > -1) {
+						roleAliases[role].splice(idx, 1);
+					}
+				}
+				try {
+					save('aliases', roleAliases);
+					return 'Aliases updated for role ' + quote(context.getRoleName(role));
+				} catch (e) {
+					context.softError(e);
+				}
+				break;
+			case 'view':
+			case 'list':
+				if (role) {
+					var name = context.getRoleName(role);
+					if (!(role in roleAliases)) {
+						throw 'The role ' + quote(name) + ' does not have any aliases set.';
+					}
+					return {
+						title: 'F-List - Aliases for ' + quote(name),
+						description: roleAliases[role].join('\n')
+					};
+				} else {
+					return {
+						title: 'F-List - All Role Aliases',
+						description: Object.keys(roleAliases).map(id => {
+							var name = context.getRoleName(id);
+							return name + ' => ' + roleAliases[id].join(', ');
+						}).join('\n')
+					};
+				}
+				break;
+		}
+	}
+});
+Commands.create('assign', {
+	title: 'F-List - Assign Kinks to Role',
+	info: 'Assign kinks, delimited by commas, to the given role.',
+	private: true,
+	guild: true,
+	aliases: ['add','link','map'],
+	parameters: ['[role]','[kink(s)...]'],
+	run: function ({context,args}) {
+		var [role, ...kinks] = args;
+		role  = parseRole(role);
+		kinks = parseCSV(kinks);
+		if (!role) {
+			throw 'Invalid role ID: ' + quote(role);
+		}
+		kinkRoleMap[role] = kinkRoleMap[role] || [];
+		for (var kinkID of kinks) {
+			var kink = flist.getKink(kinkID);
+			if (!kink) {
+				throw 'Invalid kink: ' + quote(kinkID);
+			}
+			
+			if (!kinkRoleMap[role].includes(kink.id)) {
+				kinkRoleMap[role].push(kink.id);
+			} else {
+				console.log('Kink already assigned:',kink.id,'/',kink.name);
+			}
+		}
+		try {
+			save('kinks', kinkRoleMap);
+			return 'Kink map successfully updated.';
+		} catch (e) {
+			context.softError(e);
+		}
+	}
+});
+Commands.create('unassign', {
+	title: 'F-List - Unassign Kinks from Role',
+	info: 'Delete mapped kinks, delimited by commas, from the given role.',
+	private: true,
+	guild: true,
+	aliases: ['remove','unlink','unmap'],
+	parameters: ['[role]','[kink(s)...]'],
+	run: function ({context,args}) {
+		var [role, ...kinks] = args;
+		role  = parseRole(role);
+		kinks = parseCSV(kinks);
+		if (!role) {
+			throw 'Invalid role ID: ' + quote(role);
+		}
+		kinkRoleMap[role] = kinkRoleMap[role] || [];
+		for (var kinkID of kinks) {
+			var kink = flist.getKink(kinkID);
+			if (!kink) {
+				throw 'Invalid kink: ' + quote(kinkID);
+			}
+			
+			var idx = kinkRoleMap[role].findIndex(id => id == kink.name || id == kink.id);
+			if (idx > -1) {
+				kinkRoleMap[role].splice(idx, 1);
+			} else {
+				console.log('Kink not found:',kink.id,'/',kink.name);
+			}
+		}
+		try {
+			save('kinks', kinkRoleMap);
+			return 'Kink map successfully updated.';
+		} catch (e) {
+			context.softError(e);
+		}
+	}
+});
+Commands.create('assigned', {
+	title: 'F-List - Assigned Kinks',
+	info: 'View kinks assigned to a role.',
+	private: true,
+	guild: true,
+	aliases: ['view','linked','mapped'],
+	parameters: ['[role]'],
+	run: function ({context,args}) {
+		var role = parseRole(args.slice(1).join(' '));
+		var name = context.getRoleName(role);
+		if (role || name) {
+			if (name) {
+				if (role in kinkRoleMap) {
+					var e = {
+						title: quote(name),
+						description: kinkRoleMap[role].map(kink => {
+							return flist.getKink(kink).toString();
+						}).join('\n')
+					};
+					return e;
+				} else {
+					return 'There are no kinks assigned to ' + quote(name);
+				}
+			} else {
+				throw 'Invalid role ID: ' + quote(role);
+			}
+		} else {
+			var e = {
+				description: '',
+				fields: []
+			};
+			for (role in kinkRoleMap) {
+				e.fields.push({
+					name: context.getRoleName(role),
+					value: kinkRoleMap[role].map(kink => {
+						return flist.getKink(kink).toString();
+					}).join('\n'),
+					inline: true
+				});
+			}
+			return e;
+		}
+	}
+});
+Commands.create('default', {
+	title: 'Default Role',
+	info: 'Gets or sets the default role, which is assigned when no other applicable roles are decided.',
+	private: true,
+	guild: true,
+	parameters: ['[role]'],
+	run: function ({context,args}) {
+		var role = parseRole(args.slice(1).join(' '));
+		var name = context.getRoleName(role);
+		if (role || name) {
+			if (!name) {
+				throw 'Invalid role name or ID: ' + role;
+			}
+			auth['default'] = role;
+			try {
+				save('auth', auth);
+			} catch (e) {
+				context.softError(e);
+			}
+		} else {
+			role = auth['default'];
+			name = role && context.getRoleName(role);
+		}
+		return '**' + (name || '(Not set)') + '**';
+	}
+});
+Commands.create('cleanup', {
+	info: 'Removes a number of messages in the channel.',
+	private: true,
+	aliases: ['prune','tidy','purge','nuke'],
+	run: function ({client,args,channel}) {
+		var count = args[0] || 50;
+		console.log('Deleting',count,'messages in',channel.id);
+		return channel.fetchMessages(Number(count))
+		.then(response => client.Messages.deleteMessages(response.messages));
+	}
+});
+Commands.create('exit', {
+	info: 'Stops running the bot.',
+	private: true,
+	aliases: ['stop','quit','abort','gtfo'],
+	run: function ({client}) {
+		client.disconnect();
+		process.exit(0);
+	}
+});
+
 const client = new Discordie({
 	autoReconnect: true
 });
@@ -309,430 +845,27 @@ client.connect({
 });
 client.Dispatcher.on('GATEWAY_READY', () => {
 	client.User.setStatus({
-		name: PREFIX + ' help',
-		type: 0
+		name: PREFIX + '?',
+		type: 1
 	});
 	console.log('FListBot connected.');
 });
 client.Dispatcher.on('MESSAGE_CREATE', (response) => {
-	var channel = response.message.channel;
-	var guild   = channel.guild;
-	var user    = response.message.author;
-	var member  = guild ? user.memberOf(guild) : null;
-	var message = response.message.content;
+	var context = new Context(response, client);
 	
-	if (user.id === client.User.id || !message.startsWith(PREFIX)) return;
+	if (context.user.id === client.User.id || !context.command) return;
+	var command = Commands.get(context.cmd);
+	if (!command) return;
+	console.log('Command:',context.command);
 	
-	function checkAuth() {
-		if (!auth.admins.includes(user.id)) {
-			channel.sendMessage(':warning: You are not authorized to use this command.');
-			return true;
+	return command.resolve(context).then(response => {
+		if (typeof response === 'object') {
+			if (response.title || response.description || response.fields || response.url || response.image) {
+				response.color = FLIST_COLOR;
+				return context.channel.sendMessage('', false, response);
+			}
+		} else if (response) {
+			return context.channel.sendMessage(response);
 		}
-		return false;
-	}
-	function checkGuild() {
-		if (!guild) {
-			channel.sendMessage(':warning: You cannot use that command in DMs.');
-			return true;
-		}
-		return false;
-	}
-	function error(e) {
-		console.error(e);
-		channel.sendMessage('Oopsie woopsie! UwU we made a fucky wucky! A wittle fucko boingo!\n```\n' + e + '\n```');
-	}
-	function softError(e) {
-		console.error(e);
-		channel.sendMessage('Oops! Something went wrong...');
-	}
-	function getKinkRole(kink) {
-		kink = flist.getKink(kink);
-		if (kink) for (var roleID in kinkRoleMap) {
-			if (kinkRoleMap[roleID].find(k => k == kink.id)) {
-				return roleID;
-			}
-		}
-		return 0;
-	}
-	function getRoleName(role) {
-		role = guild.roles.find(r => r.id == role);
-		return role ? role.name : '';
-	}
-	
-	console.log('Command:',message);
-	var args = message.substring(PREFIX.length+1).split(' ');
-	try {
-	switch (args[0]) {
-		case '':
-		case undefined:
-			break;
-			
-		case 'test':
-			channel.sendMessage('hi');
-			break;
-			
-		case 'help':
-		case 'halp':
-		case 'ayuda':
-		case '?':
-			channel.sendMessage(HELP);
-			break;
-			
-		case 'ilike':
-		case 'ilove':
-		case 'addme':
-		case 'roleme':
-			if (checkGuild()) break;
-			var roles = parseCSV(args.slice(1)).map(id => {
-				var role = parseRole(id);
-				if (Number(role)) return role;
-				else return getKinkRole(id);
-			});
-			roles.filter(Boolean).forEach(role => {
-				member.assignRole(role);
-			});
-			channel.sendMessage('I have assigned you some roles based on your interests.');
-			break;
-			
-		case 'idislike':
-		case 'ihate':
-		case 'removeme':
-		case 'unroleme':
-			if (checkGuild()) break;
-			var roles = parseCSV(args.slice(1)).map(id => {
-				var role = parseRole(id);
-				if (Number(role)) return role;
-				else return getKinkRole(id);
-			});
-			roles.filter(Boolean).forEach(role => {
-				member.unassignRole(role);
-			});
-			channel.sendMessage('I have removed some of your roles that you didn\'t like.');
-			break;
-			
-		case 'kink':
-			var kinkName = args.slice(1).join(' ');
-			var kink = flist.getKink(kinkName);
-			if (!kink) return error('Unknown kink: ' + quote(kinkName));
-			channel.sendMessage('', false, kink.embed());
-			break;
-			
-		case 'kinks':
-			var specificKinkGroup = args.slice(1).join(' ');
-			if (specificKinkGroup) {
-				var group = flist.getKinkGroup(specificKinkGroup);
-				if (!group) return error('Unknown kink group: ' + quote(specificKinkGroup));
-				channel.sendMessage('', false, group.embed());
-			} else {
-				channel.sendMessage('', false, flist.embed());
-			}
-			break;
-			
-		case 'search':
-		case 'find':
-		case 'lookup':
-			var kinkQuery = parseCSV(args.slice(1));
-			var results = flist.search(kinkQuery);
-			if (results.length) {
-				var e = {
-					title: 'F-List - Kinks matching ' + kinkQuery.map(quote).join(', '),
-					description: '',
-					color: FLIST_COLOR
-				};
-				for (var kink of results) {
-					e.description += kink.toString() + '\n';
-				}
-				channel.sendMessage('', false, e);
-			} else {
-				channel.sendMessage('No kinks matched your query.');
-			}
-			break;
-			
-		case 'alias':
-			if (checkAuth()) break;
-			if (checkGuild()) break;
-			var [role, ...aliases] = args.slice(2);
-			role = parseRole(role);
-			aliases = parseCSV(aliases);
-			switch (args[1]) {
-				case 'add':
-				case 'set':
-					if (!role) {
-						return error('Invalid role ID: ' + quote(role));
-					}
-					roleAliases[role] = roleAliases[role] || [];
-					for (var a of aliases) {
-						if (!roleAliases[role].find(ra => strcmp(ra,a))) {
-							roleAliases[role].push(a);
-						}
-					}
-					try {
-						save('aliases', roleAliases);
-						channel.sendMessage('Aliases updated for role ' + quote(getRoleName(role)));
-					} catch (e) {
-						softError(e);
-					}
-					break;
-				case 'remove':
-				case 'clear':
-					if (!role) {
-						return error('Invalid role ID: ' + quote(role));
-					}
-					roleAliases[role] = roleAliases[role] || [];
-					for (var a of aliases) {
-						var idx = roleAliases[role].findIndex(ra => strcmp(ra,a));
-						if (idx > -1) {
-							roleAliases[role].splice(idx, 1);
-						}
-					}
-					try {
-						save('aliases', roleAliases);
-						channel.sendMessage('Aliases updated for role ' + quote(getRoleName(role)));
-					} catch (e) {
-						softError(e);
-					}
-					break;
-				case 'view':
-				case 'list':
-					if (role) {
-						var name = getRoleName(role);
-						if (role in roleAliases) {
-							channel.sendMessage('', false, {
-								title: 'F-List - Aliases for ' + quote(name),
-								description: roleAliases[role].join('\n'),
-								color: FLIST_COLOR
-							});
-						} else {
-							channel.sendMessage('The role ' + quote(name) + ' does not have any aliases set.');
-						}
-					} else {
-						channel.sendMessage('', false, {
-							title: 'F-List - All Role Aliases',
-							description: Object.keys(roleAliases).map(id => {
-								var name = getRoleName(id);
-								return name + ' => ' + roleAliases[id].join(', ');
-							}).join('\n'),
-							color: FLIST_COLOR
-						});
-					}
-					break;
-			}
-			break;
-			
-		case 'assign':
-		case 'add':
-		case 'link':
-		case 'map':
-			if (checkAuth()) break;
-			if (checkGuild()) break;
-			var [role, ...kinks] = args.slice(1);
-			role  = parseRole(role);
-			kinks = parseCSV(kinks);
-			if (!role) {
-				return error('Invalid role ID: ' + quote(role));
-			}
-			kinkRoleMap[role] = kinkRoleMap[role] || [];
-			for (var kinkID of kinks) {
-				var kink = flist.getKink(kinkID);
-				if (!kink) return error('Invalid kink: ' + quote(kinkID));
-				
-				if (!kinkRoleMap[role].includes(kink.id)) {
-					kinkRoleMap[role].push(kink.id);
-				} else {
-					console.log('Kink already assigned:',kink.id,'/',kink.name);
-				}
-			}
-			try {
-				save('kinks', kinkRoleMap);
-				channel.sendMessage('Kink map successfully updated.');
-			} catch (e) {
-				softError(e);
-			}
-			break;
-			
-		case 'unassign':
-		case 'remove':
-		case 'unlink':
-		case 'unmap':
-			if (checkAuth()) break;
-			if (checkGuild()) break;
-			var [role, ...kinks] = args.slice(1);
-			role  = parseRole(role);
-			kinks = parseCSV(kinks);
-			if (!role) {
-				return error('Invalid role ID: ' + quote(role));
-			}
-			kinkRoleMap[role] = kinkRoleMap[role] || [];
-			for (var kinkID of kinks) {
-				var kink = flist.getKink(kinkID);
-				if (!kink) return error('Invalid kink: '+ quote(kinkID));
-				
-				var idx = kinkRoleMap[role].findIndex(id => id == kink.name || id == kink.id);
-				if (idx > -1) {
-					kinkRoleMap[role].splice(idx, 1);
-				} else {
-					console.log('Kink not found:',kink.id,'/',kink.name);
-				}
-			}
-			try {
-				save('kinks', kinkRoleMap);
-				channel.sendMessage('Kink map successfully updated.');
-			} catch (e) {
-				softError(e);
-			}
-			break;
-			
-		case 'assigned':
-		case 'linked':
-		case 'mapped':
-			if (checkAuth()) break;
-			if (checkGuild()) break;
-			var role = parseRole(args.slice(1).join(' '));
-			var name = getRoleName(role);
-			if (role || name) {
-				if (name) {
-					if (role in kinkRoleMap) {
-						var e = {
-							title: 'F-List - Kinks assigned to ' + quote(name),
-							description: kinkRoleMap[role].map(kink => {
-								return flist.getKink(kink).toString();
-							}).join('\n'),
-							color: FLIST_COLOR
-						};
-						channel.sendMessage('', false, e);
-					} else {
-						channel.sendMessage('There are no kinks assigned to ' + quote(name));
-					}
-				} else {
-					error('Invalid role ID: ' + quote(role));
-				}
-			} else {
-				var e = {
-					title: 'F-List - Assigned Kinks',
-					description: '',
-					fields: [],
-					color: FLIST_COLOR
-				};
-				for (role in kinkRoleMap) {
-					e.fields.push({
-						name: getRoleName(role),
-						value: kinkRoleMap[role].map(kink => {
-							return flist.getKink(kink).toString();
-						}).join('\n'),
-						inline: true
-					});
-				}
-				channel.sendMessage('', false, e);
-			}
-			break;
-			
-		case 'default':
-			if (checkAuth()) return;
-			if (checkGuild()) break;
-			var role = parseRole(args.slice(1).join(' '));
-			var name = getRoleName(role);
-			if (role || name) {
-				if (name) {
-					auth['default'] = role;
-					save('auth', auth);
-				} else {
-					throw 'Invalid role name or ID: ' + role;
-				}
-			} else {
-				role = auth['default'];
-				name = role && getRoleName(role);
-			}
-			channel.sendMessage('Default role: **' + (name || '(Not set)') + '**');
-			break;
-		
-		case 'cleanup':
-		case 'prune':
-		case 'tidy':
-			if (checkAuth()) return;
-			var count = args[1] || 50;
-			console.log('Deleting',count,'messages in',channel.id);
-			channel.fetchMessages(Number(count))
-			.then(response => client.Messages.deleteMessages(response.messages));
-			break;
-			
-		case 'quit':
-		case 'exit':
-		case 'stop':
-			if (checkAuth()) return;
-			client.disconnect();
-			process.exit(0);
-			break;
-			
-		case 'assign':
-		case 'diagnose':
-		default:
-			if (checkGuild()) break;
-			var targetMember = member;
-			var assign = args[0] === 'assign';
-			if (assign) {
-				if (checkAuth()) return;
-				var id = args[1].match(/\d+/);
-				targetMember = guild.members.find(m => m.id == id);
-				if (!targetMember) {
-					throw 'Invalid user: ' + args[1];
-				}
-				args.splice(0,2);
-			}
-			var diagnose = args[0] === 'diagnose';
-			if (diagnose) {
-				args.splice(0,1);
-			}
-			var [name, choice] = args;
-			if (FLIST_ACCT.test(name)) name = name.match(FLIST_ACCT)[1];
-			if (choice) choice = choice.toLowerCase();
-			choice = FLIST_CHOICES.indexOf(choice);
-			if (choice < 0) choice = 1;
-			flist.getCharacter(name)
-			.then(charData => {
-				if (!charData) throw 'Character data not found.';
-				var charKinks = charData.kinks;
-				if (!charKinks) throw 'Character kinks not found?';
-				var kinkMap = {};
-				for (var roleID in kinkRoleMap) {
-					var kinks = kinkRoleMap[roleID];
-					var kinksMatched = [];
-					if (kinks.some(kinkID => {
-						return (kinkID in charKinks)
-						&& (FLIST_CHOICES.indexOf(charKinks[kinkID]) <= choice)
-						&& (kinksMatched.push(kinkID));
-					})) {
-						kinkMap[roleID] = kinksMatched;
-					}
-				}
-				var recognizedKinks = Object.keys(kinkMap);
-				if (diagnose) {
-					var embed = {
-						title: 'F-List Diagnosis: Applicable Roles',
-						description: ''
-					};
-					for (var roleID in kinkMap) {
-						embed.description += '**__' + getRoleName(roleID) + '__** \n';
-						embed.description += kinkMap[roleID].map(k => flist.getKink(k).toString()).join('\n') + '\n';
-					}
-					user.openDM().then(DM => DM.sendMessage('', false, embed));
-					channel.sendMessage('I sent you a diagnosis of that F-List.');
-				} else if (recognizedKinks.length) {
-					recognizedKinks.forEach(roleID => targetMember.assignRole(roleID));
-					channel.sendMessage('I assigned you some roles based on your F-List likes.');
-				} else {
-					roleID = auth['default'];
-					if (roleID) {
-						targetMember.assignRole(roleID);
-						channel.sendMessage('I assigned you the default role.');
-					} else {
-						channel.sendMessage('Hmm, I don\'t recognize any kinks you have.');
-					}
-				}
-			})
-			.catch(error);
-	}
-	} catch (e) {
-		error(e);
-	}
+	}).catch(err => context.handleError(err));
 });
-
