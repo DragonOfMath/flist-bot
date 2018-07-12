@@ -366,7 +366,7 @@ class Command {
 	}
 	embed() {
 		return {
-			title: 'Usage for ' + quote(this.id),
+			title: 'Command: ' + quote(this.id),
 			description: this.info || 'No information about this command.',
 			fields: [
 				{
@@ -388,7 +388,6 @@ class Command {
 	}
 	
 }
-
 Command.TEMPLATE = {
 	title: '',
 	info: '',
@@ -555,6 +554,7 @@ Commands.create('idislike', {
 Commands.create('kinks', {
 	title: 'F-List Kinks',
 	info: 'Display a list of kink groups, or kinks in a specified group.',
+	aliases: ['fetishes'],
 	parameters: ['[group]'],
 	run: function ({args}) {
 		var specificKinkGroup = args.join(' ');
@@ -572,6 +572,7 @@ Commands.create('kinks', {
 Commands.create('kink', {
 	title: 'F-List Kink',
 	info: 'Retrieve a description of the specified kink, by name or ID.',
+	aliases: ['fetish'],
 	parameters: ['[kink]'],
 	run: function ({args}) {
 		var kinkName = args.join(' ');
