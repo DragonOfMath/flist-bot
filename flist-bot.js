@@ -845,10 +845,7 @@ client.connect({
 	autorun: true
 });
 client.Dispatcher.on('GATEWAY_READY', () => {
-	client.User.setStatus({
-		name: PREFIX + '?',
-		type: 1
-	});
+	client.User.setGame(PREFIX + 'help');
 	console.log('FListBot connected.');
 });
 client.Dispatcher.on('MESSAGE_CREATE', (response) => {
